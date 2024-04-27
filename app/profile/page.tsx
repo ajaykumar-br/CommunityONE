@@ -1,0 +1,168 @@
+import { Button } from "@/components/ui/button";
+import Link from "next/link";
+import prisma from "../lib/db";
+import { getKindeServerSession } from "@kinde-oss/kinde-auth-nextjs/server";
+import { Edit, File, Trash } from "lucide-react";
+import { Card } from "@/components/ui/card";
+
+import { revalidatePath, unstable_noStore as noStore } from "next/cache";
+import supabase from "@/lib/supabaseClient";
+
+async function getData(userId: string) {
+  noStore();
+  const data = await prisma.user.findUnique({
+    where: {
+      id: userId,
+    },
+    select: {
+      Posts: {
+        select: {
+          title: true,
+          id: true,
+          description: true,
+          picture: true,
+          createdAt: true,
+        },
+        orderBy: {
+          createdAt: "desc",
+        },
+      },
+    },
+  });
+
+  return data;
+}
+
+export default async function DashboardPage() {
+  const { getUser } = getKindeServerSession();
+  const user = await getUser();
+  const data = await getData(user?.id as string);
+
+  async function deleteNote(formData: FormData) {
+    "use server";
+
+    const postId = formData.get("postId") as string;
+
+    await prisma.post.delete({
+      where: {
+        id: postId,
+      },
+    });
+
+    revalidatePath("/profile");
+  }
+
+  async function getImageFromStorage(picture: string) {
+    if (!picture) {
+      return "";
+    }
+
+    const { data } = await supabase.storage
+      .from("uploads")
+      .getPublicUrl(picture);
+    return data;
+  }
+
+  async function deleteImage(picture: string) {
+    if (!picture) {
+      return;
+    }
+
+    const { data, error } = await supabase.storage
+      .from("uploads")
+      .remove(picture["name"]);
+
+    if (error) {
+      console.error("Error deleting image:", error);
+    } else {
+      console.log("Image deleted successfully:", data);
+    }
+  }
+
+  return (
+    <div className="grid items-start gap-y-8">
+      <div className="flex items-center justify-between px-2">
+        <div className="grid gap-1">
+          <h1 className="text-3xl md:text-4xl">Your Posts</h1>
+          <p className="text-lg text-muted-foreground">
+            Here you can see and create new posts
+          </p>
+        </div>
+        <Button asChild>
+          <Link href="/profile/new">Create a new Post</Link>
+        </Button>
+      </div>
+
+      {data?.Posts.length == 0 ? (
+        <div className="flex min-h-[400px] flex-col items-center justify-center rounded-md border border-dashed p-8 text-center animate-in fade-in-50">
+          <div className="flex h-20 w-20 items-center justify-center rounded-full bg-primary/10">
+            <File className="w-10 h-10 text-primary" />
+          </div>
+
+          <h2 className="mt-6 text-xl font-semibold">
+            You dont have any posts created
+          </h2>
+          <p className="mb-8 mt-2 text-center text-sm leading-6 text-muted-foreground max-w-sm mx-auto">
+            You currently dont have any posts. please create some so that you
+            can see them right here.
+          </p>
+
+          <Button asChild>
+            <Link href="/profile/new">Create a new Post</Link>
+          </Button>
+        </div>
+      ) : (
+        <div className="flex flex-col gap-y-4 w-3/4">
+          {data?.Posts.map((item) => (
+            <Card
+              key={item.id}
+              className="flex flex-col items-center justify-between p-4"
+            >
+              <div className="w-[700px]">
+                <h2 className="font-semibold text-xl text-primary">
+                  {item.title}
+                </h2>
+                <p className="text-xs my-2">
+                  {new Intl.DateTimeFormat("en-US", {
+                    dateStyle: "full",
+                  }).format(new Date(item.createdAt))}
+                </p>
+                <p className="text-justify my-3">{item.description}</p>
+                <div className="mt-3">
+                  {getImageFromStorage(item.picture)
+                    .then((url) => (
+                      <img
+                        src={url["publicUrl"]}
+                        alt="images"
+                        className="rounded-md w-full object-cover"
+                      />
+                    ))
+                    .catch((e) => {
+                      console.log(e);
+                      return null;
+                    })}
+                </div>
+              </div>
+
+              <div className="flex gap-x-4 mt-3 justify-between">
+                <Link href={`/profile/new/${item.id}`}>
+                  <Button variant="outline" size="icon">
+                    <Edit className="w-4 h-4" />
+                  </Button>
+                </Link>
+                <form action={deleteNote}>
+                  <input type="hidden" name="postId" value={item.id} />
+                  {/* <TrashDelete /> */}
+                  <Button variant={"destructive"} size="icon" type="submit">
+                    {deleteImage(item.picture).then(() => null)}
+                    <Trash className="h-4 w-4" />
+                  </Button>
+                </form>
+              </div>
+            </Card>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
